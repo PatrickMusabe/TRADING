@@ -2,6 +2,7 @@
 """
 BlueFlame Engine
 Binance demo + Solana paper (real prices) + multi-buy + memory + rule checker.
+Partial sells: 50% at +1.5%, 60% at +3%, remainder at +5% or 4h time stop.
 """
 import os, time, hmac, hashlib, requests, threading, json
 from dotenv import load_dotenv
@@ -266,8 +267,8 @@ def open_position(symbol, price, venue):
         "qty": qty,
         "remaining_qty": qty,
         "time": datetime.utcnow(),
+        "sold_1_5": False,
         "sold_3": False,
-        "sold_6": False,
         "venue": venue,
         "cost": MAX_USD,
         "base_symbol": base_symbol
@@ -343,14 +344,15 @@ def manage_positions():
             if not current:
                 continue
         change = (current - pos["entry_price"]) / pos["entry_price"] * 100
-        if change >= 3 and not pos["sold_3"]:
-            sell_portion(pos_key, 0.5, "+3%")
+        # Lowered partial take-profit levels
+        if change >= 1.5 and not pos.get("sold_1_5", False):
+            sell_portion(pos_key, 0.5, "+1.5%")
+            pos["sold_1_5"] = True
+        elif change >= 3 and not pos.get("sold_3", False):
+            sell_portion(pos_key, 0.6, "+3%")
             pos["sold_3"] = True
-        elif change >= 6 and not pos["sold_6"]:
-            sell_portion(pos_key, 0.6, "+6%")
-            pos["sold_6"] = True
-        elif change >= 10:
-            sell_portion(pos_key, 1.0, "+10%")
+        elif change >= 5:
+            sell_portion(pos_key, 1.0, "+5%")
 
 def check_rules():
     issues = []
@@ -366,7 +368,7 @@ def check_rules():
 def trading_loop():
     global last_status
     load_memory()
-    send_telegram("Engine restarted | MAX_POSITIONS=40 | multi-buy enabled.")
+    send_telegram("Engine restarted | Partial sells: 1.5% / 3% / 5%")
     while True:
         try:
             manage_positions()
