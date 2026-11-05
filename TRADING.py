@@ -2,7 +2,7 @@
 """
 BlueFlame Engine
 Binance demo + Solana paper (real prices) + multi-buy + memory + rule checker.
-Partial sells: 50% at +1.5%, 60% at +3%, remainder at +5% or 4h time stop.
+Partial sells only: 50% at +1.5%, 60% at +3%, remainder at +5%. No time stop.
 """
 import os, time, hmac, hashlib, requests, threading, json
 from dotenv import load_dotenv
@@ -328,11 +328,7 @@ def sell_portion(pos_key, portion, reason):
     save_memory()
 
 def manage_positions():
-    now = datetime.utcnow()
     for pos_key, pos in list(positions.items()):
-        if now - pos["time"] > timedelta(hours=4):
-            sell_portion(pos_key, 1.0, "4h time stop")
-            continue
         symbol = pos["base_symbol"]
         if pos["venue"] == "BINANCE":
             code, ticker = binance_public("/api/v3/ticker/price", {"symbol": symbol})
@@ -344,7 +340,7 @@ def manage_positions():
             if not current:
                 continue
         change = (current - pos["entry_price"]) / pos["entry_price"] * 100
-        # Lowered partial take-profit levels
+        # Partial take-profits only (no time stop)
         if change >= 1.5 and not pos.get("sold_1_5", False):
             sell_portion(pos_key, 0.5, "+1.5%")
             pos["sold_1_5"] = True
@@ -368,7 +364,7 @@ def check_rules():
 def trading_loop():
     global last_status
     load_memory()
-    send_telegram("Engine restarted | Partial sells: 1.5% / 3% / 5%")
+    send_telegram("Engine restarted | Partial sells only (no 4h stop)")
     while True:
         try:
             manage_positions()
