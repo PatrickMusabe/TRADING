@@ -73,7 +73,7 @@ def call_groq(messages):
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": "llama-3.1-8b-instant",
                 "messages": messages,
                 "temperature": 0.3,
                 "max_tokens": 500
