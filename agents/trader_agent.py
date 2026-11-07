@@ -73,7 +73,7 @@ def call_groq(messages):
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.1-70b-versatile",
+                "model": "llama-3.3-70b-versatile",
                 "messages": messages,
                 "temperature": 0.3,
                 "max_tokens": 500
@@ -82,7 +82,7 @@ def call_groq(messages):
         )
         if r.status_code == 200:
             return r.json()["choices"][0]["message"]["content"].strip()
-        return f"Groq error {r.status_code}"
+        return f"Groq error {r.status_code}: {r.text[:200]}"
     except Exception as e:
         return f"Groq failed: {e}"
 
