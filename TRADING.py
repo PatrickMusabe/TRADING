@@ -3,6 +3,7 @@
 BlueFlame Engine
 Binance demo + Solana paper (real prices) + multi-buy + memory + rule checker.
 Partial sells only: 50% at +1.5%, 60% at +3%, remainder at +5%. No time stop.
+Groq AI filter rejects weak/extended coins before opening.
 """
 import os, time, hmac, hashlib, requests, threading, json
 from dotenv import load_dotenv
@@ -16,6 +17,7 @@ API_KEY = os.getenv("BINANCE_DEMO_API_KEY")
 API_SECRET = os.getenv("BINANCE_DEMO_API_SECRET").encode()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MAX_USD = float(os.getenv("MAX_ORDER_USD", "10"))
 MAX_POSITIONS = 50
 MAX_BUYS_PER_COIN = 4
@@ -176,6 +178,43 @@ def get_solana_price(symbol):
         pass
     return None
 
+def groq_score_candidate(candidate):
+    """Return True if Groq thinks the coin is still worth opening."""
+    if not GROQ_API_KEY:
+        return True  # skip filter if no key
+    symbol = candidate.get("symbol", "")
+    venue = candidate.get("venue", "")
+    price = candidate.get("price", 0)
+    vol = candidate.get("volume_24h", 0)
+    liq = candidate.get("liquidity", 0)
+    prompt = f"""You are a strict crypto filter. Decide if this coin is still moving or already extended/dead.
+Symbol: {symbol}
+Venue: {venue}
+Price: {price}
+24h volume: {vol}
+Liquidity: {liq}
+Reply with only YES or NO.
+YES = still has short-term momentum and is not already pumped out.
+NO = already extended, consolidating, or likely to sit flat."""
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.1-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 10
+            },
+            timeout=15
+        )
+        if r.status_code == 200:
+            answer = r.json()["choices"][0]["message"]["content"].strip().upper()
+            return answer.startswith("YES")
+    except Exception as e:
+        print("Groq error:", e)
+    return True  # fail open if API fails
+
 def scan_binance():
     code, tickers = binance_public("/api/v3/ticker/24hr")
     if code != 200:
@@ -193,7 +232,8 @@ def scan_binance():
                 candidates.append({
                     "symbol": symbol,
                     "price": price,
-                    "venue": "BINANCE"
+                    "venue": "BINANCE",
+                    "volume_24h": volume
                 })
         except:
             continue
@@ -234,7 +274,6 @@ def scan_solana():
         print("Solana scan error:", e)
     
     if not candidates:
-        # minimal fallback
         import random
         for i in range(2):
             candidates.append({
@@ -255,7 +294,6 @@ def open_position(symbol, price, venue):
     if len(positions) >= MAX_POSITIONS:
         return False
 
-    # Dip check for additional buys
     if buy_count > 0:
         last_prices = [p["entry_price"] for p in positions.values() if p.get("base_symbol") == base_symbol]
         if last_prices:
@@ -360,7 +398,6 @@ def manage_positions():
             if not current:
                 continue
         change = (current - pos["entry_price"]) / pos["entry_price"] * 100
-        # Partial take-profits only (no time stop)
         if change >= 1.5 and not pos.get("sold_1_5", False):
             sell_portion(pos_key, 0.5, "+1.5%")
             pos["sold_1_5"] = True
@@ -384,7 +421,7 @@ def check_rules():
 def trading_loop():
     global last_status
     load_memory()
-    send_telegram("Engine restarted | Partial sells only (no 4h stop)")
+    send_telegram("Engine restarted | Groq filter active | Partial sells only")
     while True:
         try:
             manage_positions()
@@ -392,7 +429,7 @@ def trading_loop():
             if len(positions) < MAX_POSITIONS:
                 candidates = scan_binance() + scan_solana()
                 for c in candidates:
-                    if open_position(c["symbol"], c["price"], c["venue"]):
+                    if groq_score_candidate(c) and open_position(c["symbol"], c["price"], c["venue"]):
                         break
             cash = get_usdt_balance()
             b_count = sum(1 for p in positions.values() if p["venue"] == "BINANCE")
