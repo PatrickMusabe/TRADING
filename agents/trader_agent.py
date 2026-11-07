@@ -16,6 +16,7 @@ API_KEY = os.getenv("BINANCE_DEMO_API_KEY")
 API_SECRET = os.getenv("BINANCE_DEMO_API_SECRET", "").encode()
 BASE = "https://demo-api.binance.com"
 MEMORY_FILE = "/root/binance_engine/agent_memory.json"
+ENGINE_MEMORY = "/root/binance_engine/memory.json"
 
 def load_memory():
     try:
@@ -62,8 +63,23 @@ def get_usdt_balance():
     return 0.0
 
 def get_positions_summary():
-    # Simple placeholder — later connect to the engine's memory.json
-    return "No live position reader yet. Check the dashboard or engine logs."
+    try:
+        if not os.path.exists(ENGINE_MEMORY):
+            return "No engine memory file found."
+        with open(ENGINE_MEMORY) as f:
+            data = json.load(f)
+        positions = data.get("positions", {})
+        if not positions:
+            return "No open positions."
+        lines = []
+        for symbol, pos in positions.items():
+            entry = pos.get("entry_price", 0)
+            qty = pos.get("remaining_qty", pos.get("qty", 0))
+            venue = pos.get("venue", "?")
+            lines.append(f"{symbol} ({venue}) | entry ${entry:.6f} | qty {qty:.4f}")
+        return "Open positions:\n" + "\n".join(lines[:15])
+    except Exception as e:
+        return f"Could not read positions: {e}"
 
 def call_groq(messages):
     if not GROQ_API_KEY:
