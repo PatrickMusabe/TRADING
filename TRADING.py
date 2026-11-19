@@ -28,6 +28,9 @@ MEMORY_FILE = "/root/binance_engine/memory.json"
 positions = {}
 realized_pnl = 0.0
 last_status = "Starting..."
+last_status_sent = ""
+last_status_time = 0
+STATUS_COOLDOWN = 1200  # 20 minutes minimum between status messages
 
 app = Flask(__name__)
 
@@ -201,7 +204,7 @@ NO = already extended, consolidating, or likely to sit flat."""
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.1-70b-versatile",
+                "model": "openai/gpt-oss-20b",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
                 "max_tokens": 10
@@ -419,7 +422,7 @@ def check_rules():
         send_telegram("RULE CHECK FAILED:\n" + "\n".join(issues))
 
 def trading_loop():
-    global last_status
+    global last_status, last_status_sent, last_status_time
     load_memory()
     send_telegram("Engine restarted | Groq filter active | Partial sells only")
     while True:
@@ -436,7 +439,15 @@ def trading_loop():
             s_count = sum(1 for p in positions.values() if p["venue"] == "SOLANA")
             last_status = f"USDT: ${cash:.2f} | Positions: {len(positions)} | Binance: {b_count} | Solana: {s_count}"
             print("STATUS:", last_status, "PnL:", realized_pnl)
-            send_telegram(f"Status | {last_status}\nRealized PnL: ${realized_pnl:+.2f}")
+
+            # Only send status if it changed AND enough time has passed
+            status_msg = f"Status | {last_status}\nRealized PnL: ${realized_pnl:+.2f}"
+            now = time.time()
+            if status_msg != last_status_sent and (now - last_status_time) > STATUS_COOLDOWN:
+                send_telegram(status_msg)
+                last_status_sent = status_msg
+                last_status_time = now
+
             save_memory()
             time.sleep(90)
         except Exception as e:
