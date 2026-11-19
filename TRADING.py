@@ -2,8 +2,7 @@
 """
 BlueFlame Engine
 Binance demo + Solana paper (real prices) + multi-buy + memory + rule checker.
-Partial sells only: 50% at +1.5%, 60% at +3%, remainder at +5%. No time stop.
-Groq AI filter rejects weak/extended coins before opening.
+Partial sells: 50% at +0.8%, 60% at +1.5%, remainder at +2.5% or after 48 hours.
 """
 import os, time, hmac, hashlib, requests, threading, json
 from dotenv import load_dotenv
@@ -24,6 +23,7 @@ MAX_BUYS_PER_COIN = 4
 DIP_PCT = 3.0
 BASE = "https://demo-api.binance.com"
 MEMORY_FILE = "/root/binance_engine/memory.json"
+MAX_HOLD_HOURS = 48
 
 positions = {}
 realized_pnl = 0.0
@@ -328,8 +328,8 @@ def open_position(symbol, price, venue):
         "qty": qty,
         "remaining_qty": qty,
         "time": datetime.utcnow(),
+        "sold_0_8": False,
         "sold_1_5": False,
-        "sold_3": False,
         "venue": venue,
         "cost": MAX_USD,
         "base_symbol": base_symbol
@@ -389,6 +389,7 @@ def sell_portion(pos_key, portion, reason):
     save_memory()
 
 def manage_positions():
+    now = datetime.utcnow()
     for pos_key, pos in list(positions.items()):
         symbol = pos["base_symbol"]
         if pos["venue"] == "BINANCE":
@@ -401,14 +402,20 @@ def manage_positions():
             if not current:
                 continue
         change = (current - pos["entry_price"]) / pos["entry_price"] * 100
-        if change >= 1.5 and not pos.get("sold_1_5", False):
-            sell_portion(pos_key, 0.5, "+1.5%")
+        age_hours = (now - pos["time"]).total_seconds() / 3600 if isinstance(pos.get("time"), datetime) else 0
+
+        if age_hours >= MAX_HOLD_HOURS:
+            sell_portion(pos_key, 1.0, f"48h time exit")
+            continue
+
+        if change >= 0.8 and not pos.get("sold_0_8", False):
+            sell_portion(pos_key, 0.5, "+0.8%")
+            pos["sold_0_8"] = True
+        elif change >= 1.5 and not pos.get("sold_1_5", False):
+            sell_portion(pos_key, 0.6, "+1.5%")
             pos["sold_1_5"] = True
-        elif change >= 3 and not pos.get("sold_3", False):
-            sell_portion(pos_key, 0.6, "+3%")
-            pos["sold_3"] = True
-        elif change >= 5:
-            sell_portion(pos_key, 1.0, "+5%")
+        elif change >= 2.5:
+            sell_portion(pos_key, 1.0, "+2.5%")
 
 def check_rules():
     issues = []
@@ -424,7 +431,7 @@ def check_rules():
 def trading_loop():
     global last_status, last_status_sent, last_status_time
     load_memory()
-    send_telegram("Engine restarted | Groq filter active | Partial sells only")
+    send_telegram("Engine restarted | Lower TP targets + 48h time exit")
     while True:
         try:
             manage_positions()
@@ -440,7 +447,6 @@ def trading_loop():
             last_status = f"USDT: ${cash:.2f} | Positions: {len(positions)} | Binance: {b_count} | Solana: {s_count}"
             print("STATUS:", last_status, "PnL:", realized_pnl)
 
-            # Only send status if it changed AND enough time has passed
             status_msg = f"Status | {last_status}\nRealized PnL: ${realized_pnl:+.2f}"
             now = time.time()
             if status_msg != last_status_sent and (now - last_status_time) > STATUS_COOLDOWN:
